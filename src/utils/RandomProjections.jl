@@ -5,7 +5,7 @@
 # desc: Implementation of random projections to get a feature embedding that preserves distances:
 #       implementing this paper: https://web.stanford.edu/~hastie/Papers/Ping/KDD06_rp.pdf
 
-type RandomProjector
+type RandomProjector <: Mapper
     A::SparseMatrixCSC # NOTE column format, doin matrix-vector operations, so do via 
 end
 
@@ -13,9 +13,15 @@ end
 Constructs a (wrapped) sparse random projection matrix
 @param m::Int size of input space
 @param n::Int size of desired embedding space
-@param s::Float sparsity measure, > 0. (1?)
+@param s::Float sparsity measure, > 0. (1?) ub: sqrt(m) (or even m/log(m))
 """
 function RandomProjector( m::Int, n::Int, s::Float64=3. , rng::AbstractRNG=RandomDevice() )
+
+    if s > m/log(m)
+        warn("This is past the upper limit of robustness for sparsity, s = $s")
+    elseif s > sqrt(m)
+        warn("This is past the soft limit of robustness. Please ensure input data is outlier free for robusness")
+    end
 
     p_zero = 1. - 1./s
     val_p = sqrt(s)
