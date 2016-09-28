@@ -4,6 +4,7 @@
 # uses MxNet as backend because native julia etc etc
 
 
+# TODO make sure there is a warning saying that `values(actions)` must be defined--to vectorize actions  
 type DQN
     nn::NeuralNetwork
     exp_pol::ExplorationPolicy
@@ -12,16 +13,47 @@ type DQN
     checkpoint_interval::Int
     verbose::Bool
     stats::Dict{AbstractString,Vector{Real}}
-    replay_mem::ReplayMemory
+    replay_mem::Nullable{ReplayMemory}
 
     # exception stuff from History Recorder -- couldn't hurt
     capture_exception::Bool
     exception::Nullable{Exception}
     backtrace::Nullable{Any}
 end
-# TODO constructor
+function DQN(;
+            nn::NeuralNetwork=build_partial_mlp(),
+            exp_pol::ExplorationPolicy=EpsilonGreedy(),
+            max_steps::Int=100,
+            num_epoch::Int=100,
+            checkpoint_interval::Int=5,
+            verbose::Bool=true,
+            stats::Dict{AbstractString,Vector{Real}}=
+                    Dict{AbstractString,Vector{Real}}(
+                            "r_total"=>zeros(num_epoch),
+                            "td"=>zeros(num_epoch)),
+            replay_mem::Nullable{ReplayMemory}=Nullable{ReplayMemory}(),
+            capture_exception::Bool=false
+            )
 
-type DQNPolicy{S,A} <: POMDPs.policy
+
+    # TODO check stuff or something--leave replay memory null?
+    return DQN(
+                nn,
+                exp_pol,
+                max_steps,
+                num_epochs,
+                checkpoint_interval,
+                verbose,
+                stats,
+                replay_mem,
+                capture_exception,
+                nothing,
+                nothing
+                )
+
+end
+
+type DQNPolicy{S,A} <: POMDPs.Policy
     exec::mx.Executor
     input_name::Symbol
     q_values::Vector{Float32} # julia side output - for memory efficiency
@@ -57,6 +89,43 @@ function action{S,A}(p::DPWPolicy{S,A}, s::S, a::A=create_action(mdp) )
     error("Check your actions(mdp, s) function; no legal actions available from state $s")
 
 end
+
+
+
+function action(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::AbstractRNG, As_al::Vector{A}, a::A=create_action(mdp))
+
+    As = POMDPs.actions( mdp, s ) # TODO action space arg to keep things memory efficient
+    # explore
+    if r > p.eps
+        return As[rand(rng, 1:length(As))]
+    end
+    # otherwise, do best action
+
+    # move to computational graph -- potential bottleneck?
+    s_vec = convert(Vector{Float32}, s)
+    mx.copy!(solver.nn.exec.args_dict[p.input_name], s_vec )
+
+    mx.forward( solver.nn.exec )
+
+    # possible bottleneck: copy output, get maximum element
+    q_values = copy!( zeros(Float32, size(solver.nn.exec.outputs)), solver.nn.exec.outputs )
+
+    p_desc = sortperm( q_values, rev=true)
+    q = q_values[p_desc[1]] # highest value regardless of noise or legality
+
+
+    # return the highest value legal action
+    for idx in p_desc
+        a = As_all[idx]
+        if a in As
+            return a, q, idx, s_vec
+        end
+    end
+    
+    error("Check your actions(mdp, s) function; no legal actions available from state $s")
+
+end
+
 
 function dqn_update!( nn::NeuralNetwork, mem::ReplayMemory, disc::Float64, rng::AbstractRNG )
 
@@ -118,40 +187,6 @@ function dqn_update!( nn::NeuralNetwork, mem::ReplayMemory, disc::Float64, rng::
 
 end
 
-function action(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::AbstractRNG, a::A=create_action(mdp))
-
-    As = POMDPs.actions( mdp, s ) # TODO action space arg to keep things memory efficient
-    # explore
-    if r > p.eps
-        return As[rand(rng, 1:length(As))]
-    end
-    # otherwise, do best action
-
-    # move to computational graph -- potential bottleneck?
-    s_vec = convert(Vector{Float32}, s)
-    mx.copy!(solver.nn.exec.args_dict[p.input_name], s_vec )
-
-    mx.forward( solver.nn.exec )
-
-    # possible bottleneck: copy output, get maximum element
-    q_values = copy!( zeros(Float32, size(solver.nn.exec.outputs)), solver.nn.exec.outputs )
-
-    p_desc = sortperm( q_values, rev=true)
-    q = q_values[p_desc[1]] # highest value regardless of noise or legality
-
-
-    # return the highest value legal action
-    for idx in p_desc
-        a = p.actions[idx]
-        if a in As
-            return a, q, idx, s_vec
-        end
-    end
-    
-    error("Check your actions(mdp, s) function; no legal actions available from state $s")
-
-end
-
 function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
 
     # setup policy if neccessary
@@ -159,8 +194,24 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
         initialize(solver.nn)
     end
 
-    # setup experience replay
-    # TODO
+    # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
+    if isnull(solver.replay_mem)
+        # TODO add option to choose what kind of replayer to use
+        solver.replay_mem = UniformMemory(mdp)
+    end
+
+    # get all actions: this is for my/computational convenience
+    As = values(actions(mdp))
+
+    # TODO check size of output layer -- if bad, chop off end and set nn to invalid 
+
+    # complete setup for neural ntwork if necessary
+    if !solver.nn.valid
+        warn("You didn't specify a neural network or your number of output units didn't match the number of actions. Either way, not recommended")
+        fc = mx.FullyConnected(name=:fc_last, num_hidden=length(As), data=solver.nn.arch)
+        solver.nn.arch = mx.LinearRegressionOutput(name=:output)
+        solver.nn.valid = true
+    end
     
     for ep = 1:solver.num_epochs
 
@@ -182,7 +233,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
 
                 sp, r = generate_sr(mdp, s, a, rng)
 
-                ap, qp, ap_idx, sp_vec = action(solver.exp_pol, solver, mdp, sp, rng) # convenience, maybe remove ap_idx, s_vec
+                ap, qp, ap_idx, sp_vec = action(solver.exp_pol, solver, mdp, sp, rng, As) # convenience, maybe remove ap_idx, s_vec
 
                 # 1-step TD error just in case you care (e.g. prioritized experience replay)
                 _td = r + discount(mdp) * qp - q
@@ -238,7 +289,13 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
     end
 
     # return policy
-    # TODO
+    return DQNPolicy(
+                    solver.nn.exec,
+                    solver.nn.input_name,
+                    zeros(Float32, length(As)),
+                    As,
+                    mdp
+                    )
 
 end
 

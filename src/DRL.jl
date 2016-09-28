@@ -8,6 +8,7 @@ module DRL
 
 # import ...
 using POMDPs
+using MxNet
 
 # export...
 
@@ -15,7 +16,12 @@ using POMDPs
 # general definitions
 
 # include...
-include("solvers/QEC.jl")
+include(joinpath("utils","NN.jl"))
+include(joinpath("utils","ExplorationPolicy.jl"))
+include(joinpath("utils","ExperienceReplay.jl"))
+include(joinpath("solvers","DQN.jl"))
+include(joinpath("solvers","QEC.jl"))
+
 
 
 

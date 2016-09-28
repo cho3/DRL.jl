@@ -3,11 +3,11 @@
 
 abstract ReplayMemory
 
-size(::ReplayMemory) = 0
+size(::ReplayMemory) = error("Unimplemented")
 push!(::ReplayMemory, ::Vector{Real}, ::Int, ::Real, ::Vector{Real}, td::Real=1.;
-        rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}()) = 0
-peek(::ReplayMemory; rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}()) = 0
-state(::ReplayMemory, idx::Int) = 0
+        rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}()) = error("Unimplemented")
+peek(::ReplayMemory; rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}()) = error("Unimplemented")
+state(::ReplayMemory, idx::Int) = error("Unimplemented")
 
 # TODO ref paper
 type UniformMemory <: ReplayMemory
@@ -15,9 +15,24 @@ type UniformMemory <: ReplayMemory
     action_indices::Vector{Int} # which action was taken
     rewards::Vector{Real}
     mem_size::Int
-    rng::AbstractRNG
+    rng::iNullable{AbstractRNG}
 end
-# TODO make sure push! is equipped to ignore the potential td term
+function UniformMemory(mdp::MDP; 
+                        mem_size::Int=256, 
+                        rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}())
+    s = create_sate(mdp)
+    A = actions(mdp)
+    s_vec = convert(Vector{Float32}, s)
+
+    # currently pushes to cpu context (by default...)
+    return UniformMemory(
+                        mx.zeros(length(s_vec), mem_size * 2),
+                        zeros(Int, mem_size),
+                        zeros(mem_size),
+                        mem_size,
+                        rng
+                        )
+end
 size(mem::UniformMemory) = size(mem.states, 2) / 2
 function push!(mem::UniformMemory, 
                 s_vec::Vector{Real},
