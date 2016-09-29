@@ -7,6 +7,7 @@
 # TODO make sure there is a warning saying that `values(actions)` must be defined--to vectorize actions  
 type DQN
     nn::NeuralNetwork
+    target_net::Nullable{mx.Executor}
     exp_pol::ExplorationPolicy
     max_steps::Int
     num_epochs::Int
@@ -14,6 +15,7 @@ type DQN
     verbose::Bool
     stats::Dict{AbstractString,Vector{Real}}
     replay_mem::Nullable{ReplayMemory}
+    target_refresh_interval::Int
 
     # exception stuff from History Recorder -- couldn't hurt
     capture_exception::Bool
@@ -22,6 +24,7 @@ type DQN
 end
 function DQN(;
             nn::NeuralNetwork=build_partial_mlp(),
+            target_net::Nullable{mx.Executor}=nothing,
             exp_pol::ExplorationPolicy=EpsilonGreedy(),
             max_steps::Int=100,
             num_epoch::Int=100,
@@ -32,13 +35,15 @@ function DQN(;
                             "r_total"=>zeros(num_epoch),
                             "td"=>zeros(num_epoch)),
             replay_mem::Nullable{ReplayMemory}=Nullable{ReplayMemory}(),
-            capture_exception::Bool=false
+            capture_exception::Bool=false,
+            target_refresh_interval::Int=10000
             )
 
 
     # TODO check stuff or something--leave replay memory null?
     return DQN(
                 nn,
+                target_net,
                 exp_pol,
                 max_steps,
                 num_epochs,
@@ -48,7 +53,8 @@ function DQN(;
                 replay_mem,
                 capture_exception,
                 nothing,
-                nothing
+                nothing,
+                target_refresh_interval
                 )
 
 end
@@ -127,7 +133,7 @@ function action(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::Abstrac
 end
 
 
-function dqn_update!( nn::NeuralNetwork, mem::ReplayMemory, disc::Float64, rng::AbstractRNG )
+function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemory, disc::Float64, rng::AbstractRNG )
 
     # NOTE its probably more efficient to have a network setup for batch passes, and one for the individual passes (e.g. action(...)), depends on memory, I guess
 
@@ -135,17 +141,22 @@ function dqn_update!( nn::NeuralNetwork, mem::ReplayMemory, disc::Float64, rng::
     td_avg = 0.
 
     for idx = 1:nn.batch_size
-        s_idx, a_idx, r, sp_idx = peek(mem, rng=rng)
+        s_idx, a_idx, r, sp_idx, terminalp = peek(mem, rng=rng)
 
+        # TODO modify to be more like nature paper (e.g. target network)
         # setup input data accordingly
         # TODO abstract out to kDim input
-        mx.copy!( nn.exec.args_dict[nn.input_name], state(mem, sp_idx) )
+        mx.copy!( target_nn.args_dict[nn.input_name], state(mem, sp_idx) )
 
         # get target
         # TODO need discount/mdp
-        mx.forward( nn.exec)
-        qps = copy!(zeros(size( nn.exec.outputs[1] ) ), nn.exec.outputs[1])
-        qp = r + disc * qps[a_idx]
+        mx.forward( target_nn )
+        qps = copy!(zeros(size( target_nn.outputs[1] ) ), target_nn.outputs[1])
+        if terminalp
+            qp = r
+        else
+            qp = r + disc * qps[a_idx]
+        end
 
         # setup target, do forward, backward pass to get gradient
         mx.copy!( nn.exec.args_dict[nn.input_name], state(mem, s_idx) )
@@ -189,11 +200,6 @@ end
 
 function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
 
-    # setup policy if neccessary
-    if isnull(solver.nn.exec)
-        initialize(solver.nn)
-    end
-
     # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
     if isnull(solver.replay_mem)
         # TODO add option to choose what kind of replayer to use
@@ -212,13 +218,25 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
         solver.nn.arch = mx.LinearRegressionOutput(name=:output)
         solver.nn.valid = true
     end
-    
+
+    # setup policy if neccessary
+    if isnull(solver.nn.exec)
+        if isnull(solver.target_nn)
+            solver.target_nn = initialize!(solver.nn, mdp, copy=true)
+        else
+            initialize!(solver.nn, mdp)
+        end
+    end
+
+    terminalp = false
+    max_steps = solver.max_steps
+
     for ep = 1:solver.num_epochs
 
         s = initial_state(mdp, rng)
         a, q, a_idx, s_vec = action(solver.exp_pol, solver, mdp, s, rng)
+        terminal = isterminal(mdp, s)
 
-        max_steps = solver.max_steps
 
         disc = 1.0
         r_total = 0.0
@@ -238,11 +256,16 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
                 # 1-step TD error just in case you care (e.g. prioritized experience replay)
                 _td = r + discount(mdp) * qp - q
 
+                # terminality condition for easy access later (possibly expensive fn)
+                terminalp = isterminal(mdp, sp)
+
                 # update replay memory
-                push!( solver.replay_mem, s_vec, a_idx, r, sp_vec, _td, rng=rng)
+                push!( solver.replay_mem, s_vec, a_idx, r, sp_vec, terminalp, _td, rng=rng)
 
                 # only update every batch_size steps? or what?
-                td = dqn_update!( solver.nn, solver.replay_mem, discount(mdp), rng )
+                td = dqn_update!( solver.nn, solver.target_nn, solver.replay_mem, discount(mdp), rng )
+
+                # TODO target network update
 
                 td_avg += td
 
@@ -254,6 +277,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
                 s = sp
                 a = ap
                 q = qp
+                terminal = terminalp
 
                 # possibly remove
                 a_idx = ap_idx

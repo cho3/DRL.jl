@@ -50,31 +50,44 @@ function NeuralNetwork(
                         )
 end
 
-function initialize(nn::NeuralNetwork, mdp::MDP)
+function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false)
     # TODO figure out how to handle input_name
     # set up updater function (so states can be maintained)
 
+    # TODO bind with GRAD_ADD
     # turn symbols into actual computational graph with resources via c backend
-    nn.exec = mx.simple_bind(nn.arch, nn.ctx, string(nn.input_name)=size( convert( , create_state(mdp) ) ) )
+    nn.exec = mx.simple_bind(nn.arch, nn.ctx; nn.input_name=>size( convert( , create_state(mdp) ) ) )
     
     # initialize parameters
     if isa(nn.init, Vector)
-        for (initer, name) in zip( nn.init, mx.list_arguments(nn.arch) )
-            if name == nn.input_name
+        for (initer, arg) in zip( nn.init, mx.list_arguments(nn.arch) )
+            if arg == nn.input_name
                 continue
             end
-            mx.init( initer, name, nn.exec.arg_dict[name] )
+            mx.init( initer, arg, nn.exec.arg_dict[arg] )
         end
     else # not a vector
-        for name in nn.init, mx.list_arguments(nn.arch)
-            if name == nn.input_name
+        for arg in nn.init, mx.list_arguments(nn.arch)
+            if arg == nn.input_name
                 continue
             end
-            mx.init( init, name, nn.exec.arg_dict[name] )
+            mx.init( init, arg, nn.exec.arg_dict[arg] )
         end
     end
 
-    return nn.exec
+    if copy
+        copy_exec = mx.simple_bind(nn.arch, nn.ctx; nn.input_name=>size( convert( , create_state(mdp) ) ) )
+
+        for arg in mx.list_arguments(nn.arch) # shared architecture
+            if arg == nn.input_name
+                continue
+            end
+            mx.copy!(copy_exec.arg_dict[arg], nn.exec.arg_dict[arg])
+        end
+
+        return copy_exec
+    end
+
 end
 
 
