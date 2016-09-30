@@ -100,14 +100,6 @@ end
 
 function action{S,A}(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::AbstractRNG, As_all::Vector{A}, a::A=create_action(mdp))
 
-    As = POMDPs.actions( mdp, s ) # TODO action space arg to keep things memory efficient
-    r = rand(rng)
-    # explore
-    if r > p.eps
-        return POMDPs.rand(rng, As, a)#As[rand(rng, 1:length(As))]
-    end
-    # otherwise, do best action
-
     # move to computational graph -- potential bottleneck?
     s_vec = convert(Vector{Float32}, vec(mdp, s) )
     mx.copy!(get(solver.nn.exec).arg_dict[solver.nn.input_name], reshape(s_vec, length(s_vec), 1) )
@@ -117,15 +109,22 @@ function action{S,A}(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::Ab
     # possible bottleneck: copy output, get maximum element
     q_values = vec( mx.copy!( zeros(Float32, size(get(solver.nn.exec).outputs[1])), get(solver.nn.exec).outputs[1] ) )
 
+    As = iterator(POMDPs.actions( mdp, s ) ) # TODO action space arg to keep things memory efficient
+
+    r = rand(rng)
+    # explore, it's here because we need all that extra spaghetti
+    if r > p.eps
+        rdx = rand(rng, 1:length(As))
+        return (As[rdx], q_values[rdx], rdx, s_vec,)#As[rand(rng, 1:length(As))]
+    end
+
     p_desc = sortperm( q_values, rev=true)
     q = q_values[p_desc[1]] # highest value regardless of noise or legality
 
-
-    As_iter = iterator(As)
     # return the highest value legal action
     for idx in p_desc
         a = As_all[idx]
-        if a in As_iter
+        if a in As
             return (a, q, idx, s_vec,)
         end
     end
@@ -300,8 +299,8 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
 
             # print relevant metrics
             print("Epoch ", ep, 
-                "\n\tTD: ", mean(solver.stats["td"][ep-solver.checkpoint_interva:ep]), 
-                "\n\tTotal Reward: ", mean(solver.stats["r_total"][ep-solver.checkpoint_interva:ep]) )
+                "\n\tTD: ", mean(solver.stats["td"][ep-solver.checkpoint_interval+1:ep]), 
+                "\n\tTotal Reward: ", mean(solver.stats["r_total"][ep-solver.checkpoint_interval+1:ep]), "\n")
 
         end
         #return r_total
