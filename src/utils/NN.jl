@@ -7,7 +7,7 @@ type NeuralNetwork
     updater::Function # derived from  mx.AbstractOptimizer
     init::Union{mx.AbstractInitializer, Vector{mx.AbstractInitializer}}
     exec::Nullable{mx.Executor}
-    batch_size::Int # vv Fold into training options?
+    batch_size::Int # vv Fold into training options? YES TODO
     input_name::Symbol
     target_name::Symbol
     save_loc::AbstractString
@@ -18,6 +18,7 @@ function NeuralNetwork(
                         arch::mx.SymbolicNode;
                         ctx::mx.Context=mx.cpu(),
                         init::Union{mx.AbstractInitializer,Vector{mx.AbstractInitializer}}=mx.XavierInitializer(),
+                        opt::mx.AbstractOptimizer=mx.SGD(),
                         exec::Nullable{mx.Executor}=Nullable{mx.Executor}(),
                         batch_size::Int=32,
                         input_name::Symbol=:data,
@@ -37,9 +38,12 @@ function NeuralNetwork(
     #info("Setting up MXNet Architecture with:") #... to finish later maybe
     # TODO check if network has a LinearRegressionOutput
 
+    # TODO check if opt has an OptimizationState
+    opt.state = mx.OptimizationState(batch_size)
+
     return NeuralNetwork(arch,
                         ctx,
-                        updater,
+                        mx.get_updater(opt),
                         init,
                         exec,
                         batch_size,

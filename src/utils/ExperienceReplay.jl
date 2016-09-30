@@ -33,7 +33,7 @@ function UniformMemory(mdp::MDP;
                         zeros(Int, mem_size),
                         zeros(mem_size),
                         falses(mem_size),
-                        mem_size,
+                        0,
                         rng
                         )
 end
@@ -78,8 +78,9 @@ function push!(mem::UniformMemory,
     mem.rewards[mem.mem_size] = r
     mem.terminals[mem.mem_size] = terminalp
 
-    mem.states[:, mem.mem_size] = s_vec
-    mem.states[:, mem.mem_size + size(mem.states, 2)/2] = sp_vec
+    mem.states[mem.mem_size:mem.mem_size] = reshape(s_vec, length(s_vec), 1)
+    idx2 = mem.mem_size + mem.mem_size
+    mem.states[idx2:idx2] = reshape(sp_vec, length(sp_vec), 1)
 
 end
 

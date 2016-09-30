@@ -3,8 +3,6 @@
 # making stuff up as I'm going along
 # uses MxNet as backend because native julia etc etc
 
-
-# TODO make sure there is a warning saying that `values(actions)` must be defined--to vectorize actions  
 type DQN
     nn::NeuralNetwork
     target_nn::Nullable{mx.Executor}
@@ -172,13 +170,6 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         mx.copy!( get(nn.exec).arg_dict[nn.target_name], qs ) 
         mx.backward( get(nn.exec) )
     end
-    # TODO check if consistent with nature paper
-    for grad in get(nn.exec).grad_arrays
-        if grad == nothing
-            continue
-        end
-        @mx.inplace grad ./= nn.batch_size
-    end
 
     # perform update on network
     for (idx, (param, grad)) in enumerate( zip( get(nn.exec).arg_arrays, get(nn.exec).grad_arrays ) )
@@ -218,7 +209,7 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
     if !solver.nn.valid
         warn("You didn't specify a neural network or your number of output units didn't match the number of actions. Either way, not recommended")
         fc = mx.FullyConnected(name=:fc_last, num_hidden=length(As), data=solver.nn.arch)
-        solver.nn.arch = mx.LinearRegressionOutput(name=:output, data=fc)
+        solver.nn.arch = mx.LinearRegressionOutput(name=:output, data=fc, label=mx.Variable(:target))
         solver.nn.valid = true
     end
 
@@ -237,7 +228,7 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
     for ep = 1:solver.num_epochs
 
         s = initial_state(mdp, rng)
-        (a, q, a_idx, s_vec,) = action(solver.exp_pol, solver, mdp, s, rng, As)
+        (a, q, a_idx, s_vec,) = action(solver.exp_pol, solver, mdp, s, rng, As) # BoundsError indexed_next (tuple.jl) -- wtf TODO
         terminal = isterminal(mdp, s)
 
 
