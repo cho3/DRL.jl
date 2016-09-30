@@ -134,7 +134,7 @@ function action{S,A}(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::Ab
 end
 
 
-function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemory, disc::Float64, rng::AbstractRNG )
+function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemory, refresh_target::Bool, disc::Float64, rng::AbstractRNG )
 
     # NOTE its probably more efficient to have a network setup for batch passes, and one for the individual passes (e.g. action(...)), depends on memory, I guess
 
@@ -163,7 +163,7 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         mx.copy!( get(nn.exec).arg_dict[nn.input_name], state(mem, s_idx) )
         mx.forward( get(nn.exec), is_train=true )
         qs = copy!( zeros(Float32, size(get(nn.exec).outputs[1])), get(nn.exec).outputs[1])
-        td_avg += qp - qs[a_idx]
+        td_avg += (qp - qs[a_idx])^2
 
         qs[a_idx] = qp
         mx.copy!( get(nn.exec).arg_dict[nn.target_name], qs ) 
@@ -186,8 +186,15 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         grad[:] = 0
     end
 
+    # update target network
+    if refresh_target
+        for (param, param_target) in zip( get(nn.exec).arg_arrays, target_nn.arg_arrays )
+            mx.copy!(param_target, param)
+        end
+    end
 
-    return td_avg/nn.batch_size
+
+    return sqrt(td_avg/nn.batch_size)
 
 end
 
@@ -223,6 +230,7 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
 
     terminalp = false
     max_steps = solver.max_steps
+    ctr = 1
 
     for ep = 1:solver.num_epochs
 
@@ -257,7 +265,8 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
 
                 if size( get(solver.replay_mem) ) > solver.nn.batch_size
                 # only update every batch_size steps? or what?
-                td = dqn_update!( solver.nn, get(solver.target_nn), get(solver.replay_mem), discount(mdp), rng )
+                    refresh_target = mod(ctr, solver.target_refresh_interval) == 0
+                    td = dqn_update!( solver.nn, get(solver.target_nn), get(solver.replay_mem), refresh_target, discount(mdp), rng )
                 end
 
                 # TODO target network update
@@ -268,6 +277,7 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
 
                 disc *= discount(mdp)
                 step += 1
+                ctr += 1
 
                 s = sp
                 a = ap
