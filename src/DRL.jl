@@ -6,9 +6,22 @@
 
 module DRL
 
+export rl
+module rl # hack that MxNet uses because I'm lazy
 # import ...
 using POMDPs
-using MxNet
+#=
+    actions
+    action
+    Policy
+    iterator
+    dimensions
+    rand
+    vec
+=#
+import GenerativeModels: initial_state, generate_sr
+import Base: size, push!, peek
+using MXNet
 
 # export...
 
@@ -20,9 +33,9 @@ include(joinpath("utils","NN.jl"))
 include(joinpath("utils","ExplorationPolicy.jl"))
 include(joinpath("utils","ExperienceReplay.jl"))
 include(joinpath("solvers","DQN.jl"))
-include(joinpath("solvers","QEC.jl"))
+#include(joinpath("solvers","QEC.jl"))
 
 
-
+end # rl
 
 end # module

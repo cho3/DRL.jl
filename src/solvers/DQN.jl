@@ -7,7 +7,7 @@
 # TODO make sure there is a warning saying that `values(actions)` must be defined--to vectorize actions  
 type DQN
     nn::NeuralNetwork
-    target_net::Nullable{mx.Executor}
+    target_nn::Nullable{mx.Executor}
     exp_pol::ExplorationPolicy
     max_steps::Int
     num_epochs::Int
@@ -24,16 +24,16 @@ type DQN
 end
 function DQN(;
             nn::NeuralNetwork=build_partial_mlp(),
-            target_net::Nullable{mx.Executor}=nothing,
+            target_nn::Nullable{mx.Executor}=Nullable{mx.Executor}(),
             exp_pol::ExplorationPolicy=EpsilonGreedy(),
             max_steps::Int=100,
-            num_epoch::Int=100,
+            num_epochs::Int=100,
             checkpoint_interval::Int=5,
             verbose::Bool=true,
             stats::Dict{AbstractString,Vector{Real}}=
                     Dict{AbstractString,Vector{Real}}(
-                            "r_total"=>zeros(num_epoch),
-                            "td"=>zeros(num_epoch)),
+                            "r_total"=>zeros(num_epochs),
+                            "td"=>zeros(num_epochs)),
             replay_mem::Nullable{ReplayMemory}=Nullable{ReplayMemory}(),
             capture_exception::Bool=false,
             target_refresh_interval::Int=10000
@@ -43,7 +43,7 @@ function DQN(;
     # TODO check stuff or something--leave replay memory null?
     return DQN(
                 nn,
-                target_net,
+                target_nn,
                 exp_pol,
                 max_steps,
                 num_epochs,
@@ -51,10 +51,10 @@ function DQN(;
                 verbose,
                 stats,
                 replay_mem,
+                target_refresh_interval,
                 capture_exception,
                 nothing,
-                nothing,
-                target_refresh_interval
+                nothing
                 )
 
 end
@@ -68,23 +68,25 @@ type DQNPolicy{S,A} <: POMDPs.Policy
 end
 # TODO constructor
 
-function action{S,A}(p::DPWPolicy{S,A}, s::S, a::A=create_action(mdp) ) 
+function POMDPs.action{S,A}(p::DQNPolicy{S,A}, s::S, a::A=create_action(mdp) ) 
     # TODO figure out if its better to have a reference to the mdp
 
     # assuming that s is of the right type and stuff, means one less handle
 
     # move to computational graph -- potential bottleneck?
-    mx.copy!(p.exec.args_dict[p.input_name], convert(Vector{Float32}, s) )
+    s_vec = vec(p.mdp, s)
+    mx.copy!(p.exec.arg_dict[p.input_name], convert(Array{Float32,2}, reshape(s_vec, length(s_vec), 1) ) )
 
     mx.forward( p.exec )
 
     # possible bottleneck: copy output, get maximum element
-    copy!( p.q_values, p.exec.outputs )
+    # TODO this won't work--change shape of one of the two
+    copy!( p.q_values, p.exec.outputs[1] )
 
     p_desc = sortperm( p.q_values, rev=true)
 
     # return the highest value legal action
-    As = POMDPs.action( p.mdp, s ) # TODO action space arg to keep things memory efficient
+    As = POMDPs.actions( p.mdp, s ) # TODO action space arg to keep things memory efficient
     for idx in p_desc
         a = p.actions[idx]
         if a in As
@@ -98,33 +100,35 @@ end
 
 
 
-function action(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::AbstractRNG, As_al::Vector{A}, a::A=create_action(mdp))
+function action{S,A}(p::EpsilonGreedy, solver::DQN, mdp::MDP{S,A}, s::S, rng::AbstractRNG, As_all::Vector{A}, a::A=create_action(mdp))
 
     As = POMDPs.actions( mdp, s ) # TODO action space arg to keep things memory efficient
+    r = rand(rng)
     # explore
     if r > p.eps
-        return As[rand(rng, 1:length(As))]
+        return POMDPs.rand(rng, As, a)#As[rand(rng, 1:length(As))]
     end
     # otherwise, do best action
 
     # move to computational graph -- potential bottleneck?
-    s_vec = convert(Vector{Float32}, s)
-    mx.copy!(solver.nn.exec.args_dict[p.input_name], s_vec )
+    s_vec = convert(Vector{Float32}, vec(mdp, s) )
+    mx.copy!(get(solver.nn.exec).arg_dict[solver.nn.input_name], reshape(s_vec, length(s_vec), 1) )
 
-    mx.forward( solver.nn.exec )
+    mx.forward( get(solver.nn.exec) )
 
     # possible bottleneck: copy output, get maximum element
-    q_values = copy!( zeros(Float32, size(solver.nn.exec.outputs)), solver.nn.exec.outputs )
+    q_values = vec( mx.copy!( zeros(Float32, size(get(solver.nn.exec).outputs[1])), get(solver.nn.exec).outputs[1] ) )
 
     p_desc = sortperm( q_values, rev=true)
     q = q_values[p_desc[1]] # highest value regardless of noise or legality
 
 
+    As_iter = iterator(As)
     # return the highest value legal action
     for idx in p_desc
         a = As_all[idx]
-        if a in As
-            return a, q, idx, s_vec
+        if a in As_iter
+            return (a, q, idx, s_vec,)
         end
     end
     
@@ -146,12 +150,12 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         # TODO modify to be more like nature paper (e.g. target network)
         # setup input data accordingly
         # TODO abstract out to kDim input
-        mx.copy!( target_nn.args_dict[nn.input_name], state(mem, sp_idx) )
+        mx.copy!( target_nn.arg_dict[nn.input_name], state(mem, sp_idx) )
 
         # get target
         # TODO need discount/mdp
         mx.forward( target_nn )
-        qps = copy!(zeros(size( target_nn.outputs[1] ) ), target_nn.outputs[1])
+        qps = vec(copy!(zeros(Float32,size( target_nn.outputs[1] ) ), target_nn.outputs[1]))
         if terminalp
             qp = r
         else
@@ -159,38 +163,37 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         end
 
         # setup target, do forward, backward pass to get gradient
-        mx.copy!( nn.exec.args_dict[nn.input_name], state(mem, s_idx) )
-        mx.forward( nn.exec )
-        qs = copy!( zeros(size(nn.exec.outputs[1])), nn.exec.outputs[1])
+        mx.copy!( get(nn.exec).arg_dict[nn.input_name], state(mem, s_idx) )
+        mx.forward( get(nn.exec), is_train=true )
+        qs = copy!( zeros(Float32, size(get(nn.exec).outputs[1])), get(nn.exec).outputs[1])
         td_avg += qp - qs[a_idx]
 
         qs[a_idx] = qp
-        mx.copy!( nn.exec.args_dict[nn.target_name], qs ) 
-        mx.backward( nn.exec )
+        mx.copy!( get(nn.exec).arg_dict[nn.target_name], qs ) 
+        mx.backward( get(nn.exec) )
     end
     # TODO check if consistent with nature paper
-    for grad in nn.exec.grad_arrays
+    for grad in get(nn.exec).grad_arrays
         if grad == nothing
             continue
         end
-        @mx.inplace grad /= nn.batch_size
+        @mx.inplace grad ./= nn.batch_size
     end
 
     # perform update on network
-    for (idx, (param, grad)) in enumerate( zip( nn.exec.arg_arrays, nn.exec.grad_arrays ) )
+    for (idx, (param, grad)) in enumerate( zip( get(nn.exec).arg_arrays, get(nn.exec).grad_arrays ) )
         if grad == nothing
             continue
         end
         nn.updater( idx, grad, param )
     end
-
     
     # clear gradients    
-    for grad in nn.exec.grad_arrays
+    for grad in get(nn.exec).grad_arrays
         if grad == nothing
             continue
         end
-        @mx.inplace grad[:] = 0
+        grad[:] = 0
     end
 
 
@@ -198,7 +201,7 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
 
 end
 
-function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
+function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
 
     # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
     if isnull(solver.replay_mem)
@@ -207,7 +210,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
     end
 
     # get all actions: this is for my/computational convenience
-    As = values(actions(mdp))
+    As = POMDPs.iterator(actions(mdp))
 
     # TODO check size of output layer -- if bad, chop off end and set nn to invalid 
 
@@ -215,7 +218,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
     if !solver.nn.valid
         warn("You didn't specify a neural network or your number of output units didn't match the number of actions. Either way, not recommended")
         fc = mx.FullyConnected(name=:fc_last, num_hidden=length(As), data=solver.nn.arch)
-        solver.nn.arch = mx.LinearRegressionOutput(name=:output)
+        solver.nn.arch = mx.LinearRegressionOutput(name=:output, data=fc)
         solver.nn.valid = true
     end
 
@@ -234,7 +237,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
     for ep = 1:solver.num_epochs
 
         s = initial_state(mdp, rng)
-        a, q, a_idx, s_vec = action(solver.exp_pol, solver, mdp, s, rng)
+        (a, q, a_idx, s_vec,) = action(solver.exp_pol, solver, mdp, s, rng, As)
         terminal = isterminal(mdp, s)
 
 
@@ -251,7 +254,7 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
 
                 sp, r = generate_sr(mdp, s, a, rng)
 
-                ap, qp, ap_idx, sp_vec = action(solver.exp_pol, solver, mdp, sp, rng, As) # convenience, maybe remove ap_idx, s_vec
+                (ap, qp, ap_idx, sp_vec,) = action(solver.exp_pol, solver, mdp, sp, rng, As) # convenience, maybe remove ap_idx, s_vec
 
                 # 1-step TD error just in case you care (e.g. prioritized experience replay)
                 _td = r + discount(mdp) * qp - q
@@ -260,10 +263,12 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
                 terminalp = isterminal(mdp, sp)
 
                 # update replay memory
-                push!( solver.replay_mem, s_vec, a_idx, r, sp_vec, terminalp, _td, rng=rng)
+                push!( get(solver.replay_mem), s_vec, a_idx, r, sp_vec, terminalp, _td, rng=rng)
 
+                if size( get(solver.replay_mem) ) > solver.nn.batch_size
                 # only update every batch_size steps? or what?
-                td = dqn_update!( solver.nn, solver.target_nn, solver.replay_mem, discount(mdp), rng )
+                td = dqn_update!( solver.nn, get(solver.target_nn), get(solver.replay_mem), discount(mdp), rng )
+                end
 
                 # TODO target network update
 
@@ -284,9 +289,9 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
                 s_vec = sp_vec
             end
         catch ex
-            if sim.capture_exception
-                sim.exception = ex
-                sim.backtrace = catch_backtrace()
+            if solver.capture_exception
+                solver.exception = ex
+                solver.backtrace = catch_backtrace()
             else
             rethrow(ex)
             end
@@ -313,8 +318,9 @@ function solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
     end
 
     # return policy
+    # TODO make new exec that doesn't need to train
     return DQNPolicy(
-                    solver.nn.exec,
+                    get(solver.nn.exec),
                     solver.nn.input_name,
                     zeros(Float32, length(As)),
                     As,

@@ -7,4 +7,4 @@ abstract ExplorationPolicy <: Policy
 type EpsilonGreedy <: ExplorationPolicy
     eps::Float64
 end
-EpsilonGreedy(eps::Float64=0.85) = EpsilonGreedy(eps)
+EpsilonGreedy(;eps::Float64=0.85) = EpsilonGreedy(eps)

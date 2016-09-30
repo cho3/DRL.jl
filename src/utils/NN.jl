@@ -5,7 +5,7 @@ type NeuralNetwork
     arch::mx.SymbolicNode
     ctx::mx.Context
     updater::Function # derived from  mx.AbstractOptimizer
-    init::Union{mx.Initializer, Vector{mx.Initializer}}
+    init::Union{mx.AbstractInitializer, Vector{mx.AbstractInitializer}}
     exec::Nullable{mx.Executor}
     batch_size::Int # vv Fold into training options?
     input_name::Symbol
@@ -17,7 +17,7 @@ end
 function NeuralNetwork(
                         arch::mx.SymbolicNode;
                         ctx::mx.Context=mx.cpu(),
-                        init::Union{mx.Initializer,Vector{mx.Initializer}}=mx.XavierInitializer(),
+                        init::Union{mx.AbstractInitializer,Vector{mx.AbstractInitializer}}=mx.XavierInitializer(),
                         exec::Nullable{mx.Executor}=Nullable{mx.Executor}(),
                         batch_size::Int=32,
                         input_name::Symbol=:data,
@@ -50,39 +50,41 @@ function NeuralNetwork(
                         )
 end
 
+is_grad_param(s::Symbol) = string(s)[end-5:end] == "weight" || string(s)[end-3:end] == "bias"
+
 function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false)
     # TODO figure out how to handle input_name
     # set up updater function (so states can be maintained)
 
-    # TODO bind with GRAD_ADD
     # turn symbols into actual computational graph with resources via c backend
-    nn.exec = mx.simple_bind(nn.arch, nn.ctx; nn.input_name=>size( convert( , create_state(mdp) ) ) )
+    nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_ADD; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+    
     
     # initialize parameters
     if isa(nn.init, Vector)
         for (initer, arg) in zip( nn.init, mx.list_arguments(nn.arch) )
-            if arg == nn.input_name
+            if arg == nn.input_name || !is_grad_param(arg)
                 continue
             end
-            mx.init( initer, arg, nn.exec.arg_dict[arg] )
+            mx.init( initer, arg, get(nn.exec).arg_dict[arg] )
         end
     else # not a vector
-        for arg in nn.init, mx.list_arguments(nn.arch)
-            if arg == nn.input_name
+        for arg in mx.list_arguments(nn.arch)
+            if arg == nn.input_name || !is_grad_param(arg)
                 continue
             end
-            mx.init( init, arg, nn.exec.arg_dict[arg] )
+            mx.init( nn.init, arg, get(nn.exec).arg_dict[arg] )
         end
     end
 
     if copy
-        copy_exec = mx.simple_bind(nn.arch, nn.ctx; nn.input_name=>size( convert( , create_state(mdp) ) ) )
+        copy_exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_NOP; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
 
         for arg in mx.list_arguments(nn.arch) # shared architecture
             if arg == nn.input_name
                 continue
             end
-            mx.copy!(copy_exec.arg_dict[arg], nn.exec.arg_dict[arg])
+            mx.copy!(copy_exec.arg_dict[arg], get(nn.exec).arg_dict[arg])
         end
 
         return copy_exec
@@ -92,6 +94,7 @@ end
 
 
 function build_partial_mlp()
+    # TODO there's an issue wit hthis
     arch = @mx.chain mx.Variable(:data) =>
                    mx.MLP([128, 64])
     return NeuralNetwork(arch, valid=false)

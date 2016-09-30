@@ -90,7 +90,7 @@ function solve( solver::QEC, problem::POMDP, policy::QECPolicy=create_policy(sol
 
             a = action(problem, s)
 
-            sp, r = generate_sr(problem, ...)
+            #sp, r = generate_sr(problem, )
 
             # TODO break conditions
             S_history[t] = 0
