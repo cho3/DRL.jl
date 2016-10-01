@@ -170,6 +170,9 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         mx.backward( get(nn.exec) )
     end
 
+
+    update!(nn)
+    #= keep until debug shows above works
     # perform update on network
     for (idx, (param, grad)) in enumerate( zip( get(nn.exec).arg_arrays, get(nn.exec).grad_arrays ) )
         if grad == nothing
@@ -185,6 +188,7 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
         end
         grad[:] = 0
     end
+    =#
 
     # update target network
     if refresh_target

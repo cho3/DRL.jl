@@ -1,14 +1,17 @@
 # NN.jl
 # Misc functions for MxNet
 
+# this is all I can think of of the top of my head--feel free to expand
+@enum MDPInput MDPState MDPAction
 type NeuralNetwork
     arch::mx.SymbolicNode
     ctx::mx.Context
     updater::Function # derived from  mx.AbstractOptimizer
     init::Union{mx.AbstractInitializer, Vector{mx.AbstractInitializer}}
     exec::Nullable{mx.Executor}
-    batch_size::Int # vv Fold into training options? YES TODO
-    input_name::Symbol
+    grad_arrays::Union{Vector{mx.NDArray},Void}
+    batch_size::Int # vv Fold into training options?
+    input_name::Union{Symbol,Dict{MDPInput,Symbol}}
     target_name::Symbol
     save_loc::AbstractString
     valid::Bool # 
@@ -20,6 +23,7 @@ function NeuralNetwork(
                         init::Union{mx.AbstractInitializer,Vector{mx.AbstractInitializer}}=mx.XavierInitializer(),
                         opt::mx.AbstractOptimizer=mx.SGD(),
                         exec::Nullable{mx.Executor}=Nullable{mx.Executor}(),
+                        grad_arrays::Union{Void,Vector{mx.NDArray}}=nothing,
                         batch_size::Int=32,
                         input_name::Symbol=:data,
                         target_name::Symbol=:target,
@@ -39,7 +43,9 @@ function NeuralNetwork(
     # TODO check if network has a LinearRegressionOutput
 
     # TODO check if opt has an OptimizationState
-    opt.state = mx.OptimizationState(batch_size)
+    if opt.state == nothing
+        opt.state = mx.OptimizationState(batch_size)
+    end
 
     return NeuralNetwork(arch,
                         ctx,
@@ -56,13 +62,18 @@ end
 
 is_grad_param(s::Symbol) = string(s)[end-5:end] == "weight" || string(s)[end-3:end] == "bias"
 
-function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false)
+function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false, need_input_grad::Bool=false, held_out_grads::Bool=false)
     # TODO figure out how to handle input_name
     # set up updater function (so states can be maintained)
 
     # turn symbols into actual computational graph with resources via c backend
-    nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_ADD; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
-    
+    req = held_out_grads ? mx.GRAD_WRITE : mx.GRAD_ADD
+
+    if need_input_grad
+        nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+    else
+        nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+    end
     
     # initialize parameters
     if isa(nn.init, Vector)
@@ -81,7 +92,13 @@ function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false)
         end
     end
 
+    # clone gradient args
+    if need_input_grads
+        nn.grad_arrays = Union{NDArray,Void}[grad != nothing ? mx.zeros(size(grad)) : nothing for grad in nn.exec.grad_arrays]
+    end
+
     if copy
+        # TODO there might be some cases where you need the input grad, but I think you only make copies when you have a target network, so no?
         copy_exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_NOP; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
 
         for arg in mx.list_arguments(nn.arch) # shared architecture
@@ -102,4 +119,30 @@ function build_partial_mlp()
     arch = @mx.chain mx.Variable(:data) =>
                    mx.MLP([128, 64])
     return NeuralNetwork(arch, valid=false)
+end
+
+
+# convenience
+function clear!(arr::Vector{mx.NDArray})
+    for x in arr
+        if x == nothing
+            continue
+        end
+        x[:] = 0
+    end
+end
+
+
+function update!(nn::NeuralNetwork; grad_arrays::Union{Void,Vector{mx.NDArray}}=nothing)
+    # TODO have a freeze_param/idx arguments?
+    grads = grad_arrays == nothing ? get(nn.exec).grad_arrays : grad_arrays
+    # apply update
+    for (idx, (param, grad)) in enumerate(zip(get(nn.exec).arg_arrays, grads))
+        if grad == nothing
+            continue
+        end
+        nn.updater( idx, grad, param )
+    end
+    # clear gradients
+    clear!(get(nn.exec).grad_arrays)
 end

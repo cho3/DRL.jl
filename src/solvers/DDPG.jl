@@ -1,5 +1,16 @@
 # DDPG.jl
 # TODO ref paper: Continuous Control Using Deep Reinforcement Learning (or something)
+#=
+TODO figure out clean way to allow actions to be input somewhere else in the network
+e.g.: 
+
+s = mx.Variable(:state_input)
+a = mx.Variable(:action_input)
+
+conv = @mx.chain s=>mx.Convolution(...)=>mx.Convolution(...)=>mx.FullyConnected(...)
+fc_in = mx.Concat(data=[conv, a], num_args=2)
+out = @mx.chain fc_in=>mx.FullyConnected(...)=>mx.SoftmaxOutput(...)
+=#
 
 type DDPG <: POMDPs.solver
     actor::NeuralNetwork
@@ -45,6 +56,8 @@ function DDPG(;
         error("Must use normal noise for actor exploration (exp_pol=NormalExplorer())")
     end
 
+    info("Please make sure the last layer of your network is not an output layer (e.g. SoftmaxOutput)")
+
 
     return DDPG(
                 actor,
@@ -82,7 +95,7 @@ function POMDPs.action(p::DDPGPolicy{S,A}, s::S, a::A=create_action(p.mdp) )
 
     mx.copy!(p.a_vec, p.exec.outputs[1])
 
-    return convert(A, p.a_vec)
+    return devec(mdp, p.a_vec)
 
 end
 
@@ -97,66 +110,103 @@ function action{S,A}(p::ExplorationPolicy, actor::NeuralNetwork, mdp::MDP{S,A}, 
 
     noise = next!(p, rng)
 
-    return convert(A, a_vec + noise)
+    a_vec += noise
+
+    return devec(mdp, a_vec), s_vec, a_vec
 end
 
 
-function ddpg_update!()
+function ddpg_update!(actor::NeuralNetwork, critic::NeuralNetwork, actor_target::NeuralNetwork, critic_target::NeuralNetwork, mem::ReplayMemory, disc::Real, rng::AbstractRNG, input_idx::Int)
 
-    # TODO borrowed from DQN--needs to be modified
+    td_avg = 0.
 
-    for idx = 1:nn.batch_size
+    for idx = 1:actor.batch_size
+        # sample memory 
         s_idx, a_idx, r, sp_idx, terminalp = peek(mem, rng=rng)
 
-        # setup input data accordingly
-        # TODO abstract out to kDim input
-        mx.copy!( target_nn.arg_dict[nn.input_name], state(mem, sp_idx) )
+        # forward on actor_target
+        mx.copy!( actor_target.arg_dict[actor.input_name], state(mem, sp_idx) )
+        mx.forward( actor_target )
 
-        # get target
-        # TODO need discount/mdp
-        mx.forward( target_nn )
-        qps = vec(copy!(zeros(Float32,size( target_nn.outputs[1] ) ), target_nn.outputs[1]))
+        # forward on critic_target (w/ prev forward as input)
+        mx.copy!( critic_target.arg_dict[critic.input_name[MDPState]], state(mem, sp_idx) )
+        mx.copy!( critic_target.arg_dict[critic.input_name[MDPAction]], actor_target.outputs[1] )
+        mx.forward( critic_target )
+
+        qp = mx.copy!( zeros(Float32, size( critic_target.outputs[1])), critic_target.outputs[1] )[1] # should be just one variable
+
         if terminalp
-            qp = r
+            q_target = r
         else
-            qp = r + disc * qps[a_idx]
+            q_target = r + disc * qp
         end
 
-        # setup target, do forward, backward pass to get gradient
-        mx.copy!( get(nn.exec).arg_dict[nn.input_name], state(mem, s_idx) )
-        mx.forward( get(nn.exec), is_train=true )
-        qs = copy!( zeros(Float32, size(get(nn.exec).outputs[1])), get(nn.exec).outputs[1])
-        td_avg += (qp - qs[a_idx])^2
+        # forward on critic (for tderror and backprop)
+        mx.copy!( critic.arg_dict[critic.input_name[MDPState]], state(mem, sp_idx) )
+        mx.copy!( critic.arg_dict[critic.input_name[MDPAction]], action(mem, a_idx) )
+        mx.forward( critic )
+        
+        q = mx.copy!( zeros(Float32, size(crtic.outputs[1])), critic.outputs[1])[1]
 
-        qs[a_idx] = qp
-        mx.copy!( get(nn.exec).arg_dict[nn.target_name], qs ) 
-        mx.backward( get(nn.exec) )
-    end
+        # calculate tderror
+        td = q_target - q
+        td_avg += td^2
 
-    # perform update on network
-    for (idx, (param, grad)) in enumerate( zip( get(nn.exec).arg_arrays, get(nn.exec).grad_arrays ) )
-        if grad == nothing
-            continue
+        # set td as grad_out on critic_target
+        grad_out = mx.ones(1,1) * td
+
+        # backprop on critic
+        mx.backward( critic, grad_out=grad_out )
+
+        # accumulate these gradients elsewhere
+        for (i,param) in enumerate(critic,exec.grad_arrays)
+            @mx.inplace crtic.grad_arrays[i] += param
         end
-        nn.updater( idx, grad, param )
+
+        # backprop on critic w/ ones as grad_out (use mx.gradient(actions?))
+        mx.backward( critic.exec, grad_out=mx.ones(1,1) )
+
+        # forward on actor (for backprop)
+        mx.forward( actor.exec )
+
+        # backprop on actor w/ prev as grad_out
+        mx.backward( actor.exec, grad_out=critic.exec.grad_arrays[input_idx]) 
     end
-    
-    # clear gradients    
-    for grad in get(nn.exec).grad_arrays
+    # perform update on network, also clear gradients
+    update!(actor)
+    update!(critic, grad_arrays=critic.grad_arrays)
+
+    #= keep for now until debugging shows this works
+    # clear gradients 
+    clear!(get(actor.exec).grad_arrays)
+    clear!(get(critic.exec).grad_arrays)
+    for grad in get(actor.exec).grad_arrays
         if grad == nothing
             continue
         end
         grad[:] = 0
     end
 
-    # update target network
-    for (param, param_target) in zip( get(nn.exec).arg_arrays, target_nn.arg_arrays )
-        mx.copy!(param_target, param)
+    for grad in get(critic.exec).grad_arrays
+        if grad == nothing
+            continue
+        end
+        grad[:] = 0
+    end
+    =#
+
+    # update target networks NOTE consider making a function
+    for (param, param_target) in zip( get(actor.exec).arg_arrays, actor_target.arg_arrays )
+        @mx.inplace param_target .*= (1.-solver.target_refresh_rate)
+        @mx.inplace param_target .+= solver.target_refresh_rate * param
     end
 
+    for (param, param_target) in zip( get(critic.exec).arg_arrays, critic_target.arg_arrays )
+        @mx.inplace param_target .*= (1.-solver.target_refresh_rate)
+        @mx.inplace param_target .+= solver.target_refresh_rate * param
+    end
 
-    return sqrt(td_avg/nn.batch_size)
-
+    return sqrt(td_avg/actor.batch_size)
 end
 
 
@@ -165,7 +215,7 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
     # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
     if solver.replay_mem == nothing
         # TODO add option to choose what kind of replayer to use
-        solver.replay_mem = UniformMemory(mdp)
+        solver.replay_mem = UniformMemory(mdp; vectorized_actions=true)
     end
 
     # get all actions: this is for my/computational convenience
@@ -173,6 +223,7 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
 
     # TODO check size of output layer -- if bad, chop off end and set nn to invalid 
     # TODO check size of input layer (critic = |S| + |A|, actor = |S|)
+    # TODO make sure the output layer of the critic is just a FullyConnected (or something similar)
 
     # complete setup for neural ntwork if necessary
     if !solver.actor.valid
@@ -205,10 +256,26 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
     # setup critic network(s)
     if isnull(solver.critic.exec)
         if solver.critic_target == nothing
-            solver.critic_target = initialize!(solver.critic, mdp, copy=true)
+            solver.critic_target = initialize!(solver.critic, mdp, copy=true, need_input_grad=true, held_out_grads=true)
         else
-            initialize!(solver.critic, mdp)
+            initialize!(solver.critic, mdp, need_input_grads=true, held_out_grads=true)
         end
+    end
+
+    if solver.critic.batch_size != solver.actor.batch_size
+        warn("Critic Batch Size does not match actor's--will use actor's")
+    end
+
+    critic_input_idx = 0
+    for (idx, arg) in enumerate(mx.list_arguments(solver.critic.arch))
+        if arg == solver.critic.input_name[MDPAction]
+            critic_input_idx = idx
+            break
+        end
+    end
+
+    if critic_input_idx == 0
+        error("Sorry, messed something up with finding the critic input name")
     end
 
 
@@ -222,7 +289,7 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
 
         s = initial_state(mdp, rng)
         # TODO prune return args
-        (a, q, a_idx, s_vec,) = action(solver.exp_pol, solver.actor, mdp, s, rng) # BoundsError indexed_next (tuple.jl) -- wtf TODO
+        a, s_vec, a_vec = action(solver.exp_pol, solver.actor, mdp, s, rng) # BoundsError indexed_next (tuple.jl) -- wtf TODO
         terminal = isterminal(mdp, s)
 
         disc = 1.0
@@ -236,20 +303,21 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
                 sp, r = generate_sr(mdp, s, a, rng)
 
                 # TODO prune return args
-                (ap, qp, ap_idx, sp_vec,) = action(solver.exp_pol, solver.actor, mdp, sp, rng, ap) # convenience, maybe remove ap_idx, s_vec
+                ap, sp_vec, ap_vec = action(solver.exp_pol, solver.actor, mdp, sp, rng, ap) # convenience, maybe remove ap_idx, s_vec
 
                 # 1-step TD error just in case you care (e.g. prioritized experience replay)
-                _td = r + discount(mdp) * qp - q
+                #_td = r + discount(mdp) * qp - q #
+                # leaving here in case there is a strong desire for prioritized experience replay--requires more overhead in DDPG framework
 
                 # terminality condition for easy access later (possibly expensive fn)
                 terminalp = isterminal(mdp, sp)
 
                 # update replay memory
-                push!( solver.replay_mem, s_vec, a_idx, r, sp_vec, terminalp, _td, rng=rng)
+                push!( solver.replay_mem, s_vec, a_vec, r, sp_vec, terminalp, rng=rng)
 
                 if size( solver.replay_mem ) > solver.nn.batch_size
                 # only update every batch_size steps? or what?
-                    td = ddpg_update!( solver.nn, get(solver.target_nn), solver.replay_mem, discount(mdp), rng )
+                    td = ddpg_update!( solver.actor, solver.critic, solver.actor_target, solver.critic_target, solver.replay_mem, discount(mdp), rng )
                 end
 
                 td_avg += td
@@ -265,9 +333,8 @@ function POMDPs.solve(solver::DDPG, mdp::MDP, rng::AbstractRNG)
                 q = qp
                 terminal = terminalp
 
-                # possibly remove
-                a_idx = ap_idx
                 s_vec = sp_vec
+                a_vec = ap_vec
             end
         catch ex
             if solver.capture_exception

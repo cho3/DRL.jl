@@ -15,32 +15,41 @@ state(::ReplayMemory, idx::Int) = error("Unimplemented")
 # TODO ref paper
 type UniformMemory <: ReplayMemory
     states::mx.NDArray # giant NDArray for speed--probably not too much fatter in memory
-    action_indices::Vector{Int} # which action was taken
+    actions::Union{Vector{Int},mx.NDArray} # which action was taken
     rewards::RealVector
     terminals::Vector{Bool}
     mem_size::Int
+    vectorized_actions::Bool
     rng::Nullable{AbstractRNG}
 end
 function UniformMemory(mdp::MDP; 
+                        vectorized_actions::Bool=false,
                         mem_size::Int=256, 
                         rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}())
     s = create_state(mdp)
     s_vec = convert(Vector{Float32}, vec(mdp, s) )
 
+    if vectorized_actions
+        actions = mx.zeros( dimensions( actions(mdp) ), mem_size * 2 )
+    else
+        actions = zeros(Int, mem_size)
+    end
+
     # currently pushes to cpu context (by default...)
     return UniformMemory(
                         mx.zeros(length(s_vec), mem_size * 2),
-                        zeros(Int, mem_size),
+                        actions,
                         zeros(mem_size),
                         falses(mem_size),
                         0,
+                        vectorized_actions,
                         rng
                         )
 end
 size(mem::UniformMemory) = size(mem.states, 2) / 2
 function push!(mem::UniformMemory, 
                 s_vec::RealVector,
-                a_idx::Int,
+                a::Union{Int,RealVector},
                 r::Real,
                 sp_vec::RealVector,
                 terminalp::Bool=false,
@@ -60,7 +69,12 @@ function push!(mem::UniformMemory,
             replace_idx = rand(rng, 1:mem.mem_size)
         end
 
-        mem.action_indices[replace_idx] = a_idx
+
+        if mem.vectorized_actions
+            mem.actions[replace_idx:replace_idx] = a_idx
+        else
+            mem.actions[replace_idx] = a_idx
+        end
         mem.rewards[replace_idx] = r
         mem.terminals[replace_idx] = terminalp
 
@@ -74,7 +88,11 @@ function push!(mem::UniformMemory,
 
     mem.mem_size += 1
 
-    mem.action_indices[mem.mem_size] = a_idx
+    if mem.vectorized_actions
+        mem.actions[mem.mem_size:mem.mem_size] = a_idx
+    else
+        mem.actions[mem.mem_size] = a_idx
+    end
     mem.rewards[mem.mem_size] = r
     mem.terminals[mem.mem_size] = terminalp
 
@@ -89,18 +107,19 @@ function peek(mem::UniformMemory; rng::Union{Void,AbstractRNG}=nothing )
     idx = rand( rng==nothing ? mem.rng : rng, 1:mem.mem_size)
 
     return idx, 
-            mem.action_indices[idx], 
+            mem.vectorized_actions ? idx : mem.actions[idx], 
             mem.rewards[idx], 
             idx + convert(Int,(size(mem.states, 2) / 2)), 
             mem.terminals[idx]
 end
 
 state(mem::UniformMemory, idx::Int) = mem.states[idx:idx]
-
+action(mem::UniformMemory, idx::Int) = mem.actions[idx:idx]
 
 
 
 # TODO ref paper
+# TODO add a bunch of stuff that is consistent with UniformMemory
 type PrioritizedMemory <: ReplayMemory
     states::mx.NDArray # giant NDArray for speed--probably not too much fatter in memory
     action_indices::Vector{Int} # which action was taken

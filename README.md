@@ -6,13 +6,15 @@ It's actually not so gradiose.
 
 Julia implementations of deep reinforcement learning algorithms.
 
+Working-ish:
+* Deep Q Learning (DQN)
+
 Currently working on:
 * Model-Free Episodic Control (QEC)
-* Deep Q learning (DQN)
+* Deterministic Policy Gradient (DDPG)
 
 To work on:
 * Stochastic Policy Gradient (SDPG)
-* Deterministic Policy Gradient (DDPG)
 * Trust Region Policy Optimization (TRPO)
 * Trust Region Generalized Advantage Estimate (TRGAE)
 * VIME
