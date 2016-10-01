@@ -18,6 +18,8 @@ using POMDPs
     dimensions
     rand
     vec
+    solver
+    MDP
 =#
 import GenerativeModels: initial_state, generate_sr
 import Base: size, push!, peek
@@ -29,10 +31,12 @@ using MXNet
 # general definitions
 
 # include...
+include(joinpath("utils","utils.jl"))
 include(joinpath("utils","NN.jl"))
 include(joinpath("utils","ExplorationPolicy.jl"))
 include(joinpath("utils","ExperienceReplay.jl"))
 include(joinpath("solvers","DQN.jl"))
+#include(joinpath("solvers","DDPG,jl"))
 #include(joinpath("solvers","QEC.jl"))
 
 

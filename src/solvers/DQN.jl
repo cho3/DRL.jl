@@ -3,7 +3,7 @@
 # making stuff up as I'm going along
 # uses MxNet as backend because native julia etc etc
 
-type DQN
+type DQN <: POMDPs.solver
     nn::NeuralNetwork
     target_nn::Nullable{mx.Executor}
     exp_pol::ExplorationPolicy
@@ -66,7 +66,7 @@ type DQNPolicy{S,A} <: POMDPs.Policy
 end
 # TODO constructor
 
-function POMDPs.action{S,A}(p::DQNPolicy{S,A}, s::S, a::A=create_action(mdp) ) 
+function POMDPs.action{S,A}(p::DQNPolicy{S,A}, s::S, a::A=create_action(p.mdp) ) 
     # TODO figure out if its better to have a reference to the mdp
 
     # assuming that s is of the right type and stuff, means one less handle
