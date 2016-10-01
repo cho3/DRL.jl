@@ -44,14 +44,14 @@ function next!(oue::OrnsteinUhlenbeckExplorer, rng::AbstractRNG)
     end
 end
 
-function __em_next!(oue::OrnsteinUhlenbeckEXplorer, rng::AbstractRNG)
+function __em_next!(oue::OrnsteinUhlenbeckExplorer, rng::AbstractRNG)
     
     oue.state += oue.theta*(oue.mu - oue.state)*oue.dt + oue.sigma*randn(rng, size(oue.state))
 
     return oue.state
 end
 
-function __a_next!(oue::OrnsteinUhlenbeckEXplorer, rng::AbstractRNG)
+function __a_next!(oue::OrnsteinUhlenbeckExplorer, rng::AbstractRNG)
     # TODO
     error("Unimplemented")
 end

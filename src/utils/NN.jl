@@ -25,7 +25,7 @@ function NeuralNetwork(
                         exec::Nullable{mx.Executor}=Nullable{mx.Executor}(),
                         grad_arrays::Union{Void,Vector{mx.NDArray}}=nothing,
                         batch_size::Int=32,
-                        input_name::Symbol=:data,
+                        input_name::Union{Symbol,Dict{MDPInput,Symbol}}=:data,
                         target_name::Symbol=:target,
                         save_loc::AbstractString="dqn_policy.jld",
                         valid::Bool=true
@@ -43,7 +43,7 @@ function NeuralNetwork(
     # TODO check if network has a LinearRegressionOutput
 
     # TODO check if opt has an OptimizationState
-    if opt.state == nothing
+    if !isdefined(opt, :state)
         opt.state = mx.OptimizationState(batch_size)
     end
 
@@ -52,6 +52,7 @@ function NeuralNetwork(
                         mx.get_updater(opt),
                         init,
                         exec,
+                        grad_arrays,
                         batch_size,
                         input_name,
                         target_name,
@@ -70,7 +71,7 @@ function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false, need_input_g
     req = held_out_grads ? mx.GRAD_WRITE : mx.GRAD_ADD
 
     if need_input_grad
-        nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+        nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
     else
         nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
     end
@@ -114,11 +115,17 @@ function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false, need_input_g
 end
 
 
-function build_partial_mlp()
+function build_partial_mlp(inputs::Union{Symbol,Dict{MDPInput,Symbol}}=:data)
     # TODO there's an issue wit hthis
-    arch = @mx.chain mx.Variable(:data) =>
+    if isa(inputs, Dict)
+        input_sym = mx.Variable[mx.Variable(input) for input in values(inputs)]
+        input = mx.Concat(input_sym, num_args=length(input_sym) )
+    else
+        input = mx.Variable(inputs)
+    end
+    arch = @mx.chain input =>
                    mx.MLP([128, 64])
-    return NeuralNetwork(arch, valid=false)
+    return NeuralNetwork(arch, valid=false, input_name=inputs)
 end
 
 

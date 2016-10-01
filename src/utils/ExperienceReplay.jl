@@ -5,10 +5,11 @@ abstract ReplayMemory
 
 # I hate julia Vectors sometimes
 typealias RealVector Union{Vector{Real}, Vector{Int}, Vector{Float64}, Vector{Float32}}
+typealias IntRealVector Union{Int, Vector{Real}, Vector{Int}, Vector{Float64}, Vector{Float32}}
 
 size(::ReplayMemory) = error("Unimplemented")
-push!(::ReplayMemory, ::RealVector, ::Int, ::Real, ::RealVector, td::Real=1.;
-        rng::Union{Void,AbstractRNG}=nothing) = error("Unimplemented")
+#push!(::ReplayMemory, ::RealVector, ::Int, ::Real, ::RealVector, td::Real=1.;
+#        rng::Union{Void,AbstractRNG}=nothing) = error("Unimplemented")
 peek(::ReplayMemory; rng::Union{Void,AbstractRNG}=nothing) = error("Unimplemented")
 state(::ReplayMemory, idx::Int) = error("Unimplemented")
 
@@ -49,7 +50,7 @@ end
 size(mem::UniformMemory) = size(mem.states, 2) / 2
 function push!(mem::UniformMemory, 
                 s_vec::RealVector,
-                a::Union{Int,RealVector},
+                a::IntRealVector,
                 r::Real,
                 sp_vec::RealVector,
                 terminalp::Bool=false,

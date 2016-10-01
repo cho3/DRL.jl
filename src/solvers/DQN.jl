@@ -3,7 +3,7 @@
 # making stuff up as I'm going along
 # uses MxNet as backend because native julia etc etc
 
-type DQN <: POMDPs.solver
+type DQN <: POMDPs.Solver
     nn::NeuralNetwork
     target_nn::Nullable{mx.Executor}
     exp_pol::ExplorationPolicy

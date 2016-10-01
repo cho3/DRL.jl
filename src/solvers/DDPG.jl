@@ -12,7 +12,7 @@ fc_in = mx.Concat(data=[conv, a], num_args=2)
 out = @mx.chain fc_in=>mx.FullyConnected(...)=>mx.SoftmaxOutput(...)
 =#
 
-type DDPG <: POMDPs.solver
+type DDPG <: POMDPs.Solver
     actor::NeuralNetwork
     critic::NeuralNetwork
     actor_target::Union{Void,mx.Executor}
@@ -35,7 +35,7 @@ end
 
 function DDPG(;
             actor::NeuralNetwork=build_partial_mlp(),
-            critic::NeuralNetwork=build_partial_mlp(),
+            critic::NeuralNetwork=build_partial_mlp(Dict{MDPInput,Symbol}(MDPState=>:state_input,MDPAction=>:action_input)),
             actor_target::Union{Void,mx.Executor}=nothing,
             critic_target::Union{Void,mx.Executor}=nothing,
             exp_pol::ExplorationPolicy=NormalExplorer(),
@@ -86,7 +86,7 @@ type DDPGPolicy{S,A} <: POMDPs.Policy
     mdp::MDP{S,A} # for conversion/deconversion of actions
 end
 
-function POMDPs.action(p::DDPGPolicy{S,A}, s::S, a::A=create_action(p.mdp) )
+function POMDPs.action{S,A}(p::DDPGPolicy{S,A}, s::S, a::A=create_action(p.mdp) )
 
     s_vec = vec(p.mdp, s)
     copy!( p.exec.arg_dict[p.input_name], s_vec )

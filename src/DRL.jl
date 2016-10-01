@@ -36,7 +36,7 @@ include(joinpath("utils","NN.jl"))
 include(joinpath("utils","ExplorationPolicy.jl"))
 include(joinpath("utils","ExperienceReplay.jl"))
 include(joinpath("solvers","DQN.jl"))
-#include(joinpath("solvers","DDPG,jl"))
+include(joinpath("solvers","DDPG.jl"))
 #include(joinpath("solvers","QEC.jl"))
 
 
