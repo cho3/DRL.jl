@@ -4,6 +4,8 @@
 # date: 8/19/2016
 # desc: deep reinforcement learning for julia
 
+__precompile__()
+
 module DRL
 
 export rl
@@ -22,13 +24,20 @@ using POMDPs
     MDP
 =#
 import GenerativeModels: initial_state, generate_sr
-import Base: size, push!, peek
+import Base: size, push!, peek, copy!, convert
 using MXNet
-
-# export...
 
 
 # general definitions
+typealias RealVector Union{Vector{Real}, Vector{Int}, Vector{Float64}, Vector{Float32}}
+typealias RealMatrix Union{Matrix{Real}, Matrix{Int}, Matrix{Float64}, Matrix{Float32}}
+
+export devec
+# export...
+devec{S,A}(::MDP{S,A}, ::Union{RealVector,Matrix{Real}}) = error("undefined")
+## TODO ULTRA TEMPORARY HACK ##
+convert(::Type{Float64}, x::Vector{Float64}) = x[1]
+## TODO
 
 # include...
 include(joinpath("utils","utils.jl"))

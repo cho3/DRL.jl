@@ -2,6 +2,8 @@
 # built off @zsunberg's HistoryRecorder.jl
 # making stuff up as I'm going along
 # uses MxNet as backend because native julia etc etc
+# TODO modify solve signature (add policy=create_policy)
+
 
 type DQN <: POMDPs.Solver
     nn::NeuralNetwork
@@ -58,11 +60,21 @@ function DQN(;
 end
 
 type DQNPolicy{S,A} <: POMDPs.Policy
-    exec::mx.Executor
+    exec::Union{mx.Executor,Void}
     input_name::Symbol
     q_values::Vector{Float32} # julia side output - for memory efficiency
     actions::Vector{A}
     mdp::MDP{S,A}
+end
+function POMDPs.create_policy(sol::DQN, mdp::MDP)
+    A = iterator(actions(mdp))
+    return DQNPolicy(
+                    isnull(sol.nn.exec) ? nothing : sol.nn.exec,
+                    sol.nn.input_name,
+                    zeros(Float32, length(A)),
+                    A,
+                    mdp
+                    )
 end
 # TODO constructor
 
@@ -202,7 +214,7 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
 
 end
 
-function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDevice())
+function solve{S,A}(solver::DQN, mdp::MDP{S,A}, policy::DQNPolicy=create_policy(solver, mdp), rng::AbstractRNG=RandomDevice())
 
     # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
     if isnull(solver.replay_mem)
@@ -322,14 +334,10 @@ function POMDPs.solve{S,A}(solver::DQN, mdp::MDP{S,A}, rng::AbstractRNG=RandomDe
     end
 
     # return policy
+    # TODO update policy.exec more frequently
     # TODO make new exec that doesn't need to train
-    return DQNPolicy(
-                    get(solver.nn.exec),
-                    solver.nn.input_name,
-                    zeros(Float32, length(As)),
-                    As,
-                    mdp
-                    )
+    policy.exec = get(solver.nn.exec)
+    return policy
 
 end
 

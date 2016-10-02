@@ -4,7 +4,6 @@
 abstract ReplayMemory
 
 # I hate julia Vectors sometimes
-typealias RealVector Union{Vector{Real}, Vector{Int}, Vector{Float64}, Vector{Float32}}
 typealias IntRealVector Union{Int, Vector{Real}, Vector{Int}, Vector{Float64}, Vector{Float32}}
 
 size(::ReplayMemory) = error("Unimplemented")
@@ -31,15 +30,15 @@ function UniformMemory(mdp::MDP;
     s_vec = convert(Vector{Float32}, vec(mdp, s) )
 
     if vectorized_actions
-        actions = mx.zeros( dimensions( actions(mdp) ), mem_size * 2 )
+        acts = mx.zeros( dimensions( POMDPs.actions(mdp) ), mem_size * 2 )
     else
-        actions = zeros(Int, mem_size)
+        acts = zeros(Int, mem_size)
     end
 
     # currently pushes to cpu context (by default...)
     return UniformMemory(
                         mx.zeros(length(s_vec), mem_size * 2),
-                        actions,
+                        acts,
                         zeros(mem_size),
                         falses(mem_size),
                         0,
@@ -72,9 +71,9 @@ function push!(mem::UniformMemory,
 
 
         if mem.vectorized_actions
-            mem.actions[replace_idx:replace_idx] = a_idx
+            mem.actions[replace_idx:replace_idx] = a
         else
-            mem.actions[replace_idx] = a_idx
+            mem.actions[replace_idx] = a
         end
         mem.rewards[replace_idx] = r
         mem.terminals[replace_idx] = terminalp
@@ -90,9 +89,9 @@ function push!(mem::UniformMemory,
     mem.mem_size += 1
 
     if mem.vectorized_actions
-        mem.actions[mem.mem_size:mem.mem_size] = a_idx
+        mem.actions[mem.mem_size:mem.mem_size] = a
     else
-        mem.actions[mem.mem_size] = a_idx
+        mem.actions[mem.mem_size] = a
     end
     mem.rewards[mem.mem_size] = r
     mem.terminals[mem.mem_size] = terminalp

@@ -9,7 +9,7 @@ type NeuralNetwork
     updater::Function # derived from  mx.AbstractOptimizer
     init::Union{mx.AbstractInitializer, Vector{mx.AbstractInitializer}}
     exec::Nullable{mx.Executor}
-    grad_arrays::Union{Vector{mx.NDArray},Void}
+    grad_arrays::Union{Vector{Union{mx.NDArray,Void}},Void}
     batch_size::Int # vv Fold into training options?
     input_name::Union{Symbol,Dict{MDPInput,Symbol}}
     target_name::Symbol
@@ -71,9 +71,23 @@ function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false, need_input_g
     req = held_out_grads ? mx.GRAD_WRITE : mx.GRAD_ADD
 
     if need_input_grad
-        nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+        # TODO fix this to allow for dict input_names
+        if isa(nn.input_name,Dict)
+            nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req; 
+                            nn.input_name[MDPState]=>(length( vec(mdp, create_state(mdp))), 1), 
+                            nn.input_name[MDPAction]=>(length(vec(mdp, create_action(mdp))), 1) )
+        else
+            nn.exec = simple_bind2(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+        end
     else
-        nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+            # TODO copy pasta above
+        if isa(nn.input_name,Dict)
+            nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=req; 
+                            nn.input_name[MDPState]=>(length( vec(mdp, create_state(mdp))), 1), 
+                            nn.input_name[MDPAction]=>(length(vec(mdp, create_action(mdp))), 1) )
+        else
+            nn.exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=req; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+        end
     end
     
     # initialize parameters
@@ -94,13 +108,22 @@ function initialize!(nn::NeuralNetwork, mdp::MDP; copy::Bool=false, need_input_g
     end
 
     # clone gradient args
-    if need_input_grads
-        nn.grad_arrays = Union{NDArray,Void}[grad != nothing ? mx.zeros(size(grad)) : nothing for grad in nn.exec.grad_arrays]
+    if need_input_grad
+        # TODO check type of nn.grad_arrays
+        nn.grad_arrays = Union{mx.NDArray,Void}[grad != nothing ? mx.zeros(size(grad)) : nothing for grad in get(nn.exec).grad_arrays]
     end
 
     if copy
         # TODO there might be some cases where you need the input grad, but I think you only make copies when you have a target network, so no?
-        copy_exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_NOP; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+
+        # TODO copypasta for dict input
+        if isa(nn.input_name,Dict)
+            copy_exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_NOP;
+                            nn.input_name[MDPState]=>(length( vec(mdp, create_state(mdp))), 1), 
+                            nn.input_name[MDPAction]=>(length(vec(mdp, create_action(mdp))), 1) )
+        else
+            copy_exec = mx.simple_bind(nn.arch, nn.ctx, grad_req=mx.GRAD_NOP; nn.input_name=>( length( vec(mdp, create_state(mdp) ) ), 1 ) )
+        end
 
         for arg in mx.list_arguments(nn.arch) # shared architecture
             if arg == nn.input_name
@@ -118,8 +141,8 @@ end
 function build_partial_mlp(inputs::Union{Symbol,Dict{MDPInput,Symbol}}=:data)
     # TODO there's an issue wit hthis
     if isa(inputs, Dict)
-        input_sym = mx.Variable[mx.Variable(input) for input in values(inputs)]
-        input = mx.Concat(input_sym, num_args=length(input_sym) )
+        input_sym = [mx.Variable(input) for input in values(inputs)]
+        input = mx.Concat(input_sym...)
     else
         input = mx.Variable(inputs)
     end
@@ -130,7 +153,7 @@ end
 
 
 # convenience
-function clear!(arr::Vector{mx.NDArray})
+function clear!(arr::Vector{Union{mx.NDArray,Void}})
     for x in arr
         if x == nothing
             continue
@@ -140,7 +163,7 @@ function clear!(arr::Vector{mx.NDArray})
 end
 
 
-function update!(nn::NeuralNetwork; grad_arrays::Union{Void,Vector{mx.NDArray}}=nothing)
+function update!(nn::NeuralNetwork; grad_arrays::Union{Void,Vector{Union{mx.NDArray,Void}}}=nothing)
     # TODO have a freeze_param/idx arguments?
     grads = grad_arrays == nothing ? get(nn.exec).grad_arrays : grad_arrays
     # apply update
