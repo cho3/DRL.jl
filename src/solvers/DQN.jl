@@ -66,6 +66,7 @@ type DQNPolicy{S,A} <: POMDPs.Policy
     actions::Vector{A}
     mdp::MDP{S,A}
 end
+
 function POMDPs.create_policy(sol::DQN, mdp::MDP)
     A = iterator(actions(mdp))
     return DQNPolicy(
@@ -214,7 +215,7 @@ function dqn_update!( nn::NeuralNetwork, target_nn::mx.Executor, mem::ReplayMemo
 
 end
 
-function solve{S,A}(solver::DQN, mdp::MDP{S,A}, policy::DQNPolicy=create_policy(solver, mdp), rng::AbstractRNG=RandomDevice())
+function solve{S,A}(solver::DQN, mdp::MDP{S,A}, policy::DQNPolicy=POMDPs.create_policy(solver, mdp), rng::AbstractRNG=RandomDevice())
 
     # setup experience replay; initialized here because of the whole solve paradigm (decouple solver, problem)
     if isnull(solver.replay_mem)
