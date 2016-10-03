@@ -27,8 +27,12 @@ function UniformMemory(mdp::MDP;
                         mem_size::Int=256, 
                         rng::Nullable{AbstractRNG}=Nullable{AbstractRNG}())
     s = create_state(mdp)
-    s_vec = convert(Vector{Float32}, vec(mdp, s) )
+    s_vec = vec(mdp, s)
+    if length(s_vec) == 2 && size(s_vec)[2] == 1
+        s_vec = vec(s_vec)
+    end
 
+    # TODO is there any case in which actions might have a higher dimensional representation?
     if vectorized_actions
         acts = mx.zeros( dimensions( POMDPs.actions(mdp) ), mem_size * 2 )
     else
@@ -37,7 +41,7 @@ function UniformMemory(mdp::MDP;
 
     # currently pushes to cpu context (by default...)
     return UniformMemory(
-                        mx.zeros(length(s_vec), mem_size * 2),
+                        mx.zeros(size(s_vec)..., mem_size * 2),
                         acts,
                         zeros(mem_size),
                         falses(mem_size),

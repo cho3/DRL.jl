@@ -126,7 +126,7 @@ function trust_region(objective::Function,
     s = conjugate_gradient(A, b, x, num_iter=num_iter)
 
     # compute maximal step size
-    beta = sqrt(2 * del / (s'* mult(A, s) ) )
+    beta = sqrt(2 * del / mx.copy!(zeros(Float32,1,1), mx.dot(s', mult!(A, s) ) )[1])
     @mx.inplace s .*= beta
     th_new = th + s
 
@@ -136,5 +136,5 @@ function trust_region(objective::Function,
         th_new = th + s
     end
 
-    return x_new
+    return th_new
 end
