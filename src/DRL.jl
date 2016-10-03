@@ -4,7 +4,8 @@
 # date: 8/19/2016
 # desc: deep reinforcement learning for julia
 
-__precompile__()
+# IDK how this works
+#__precompile__()
 
 module DRL
 
@@ -44,6 +45,7 @@ include(joinpath("utils","utils.jl"))
 include(joinpath("utils","NN.jl"))
 include(joinpath("utils","ExplorationPolicy.jl"))
 include(joinpath("utils","ExperienceReplay.jl"))
+include(joinpath("utils","ConjugateGradient.jl"))
 include(joinpath("solvers","DQN.jl"))
 include(joinpath("solvers","DDPG.jl"))
 #include(joinpath("solvers","QEC.jl"))
