@@ -53,7 +53,7 @@ function DDPG(;
             target_refresh_rate::Real=0.001
             )
 
-    if !( typeof(exp_pol) <: NormalExplorer )
+    if !( typeof(exp_pol) <: NormalExplorer || typeof(exp_pol) <: OrnsteinUhlenbeckExplorer)
         error("Must use normal noise for actor exploration (exp_pol=NormalExplorer())")
     end
 
