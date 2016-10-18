@@ -107,14 +107,37 @@ function fit!(gan::GAN, data::mx.DataProvider; rng::AbstractRNG=RandomDevice(), 
 end
 
 
+# TODO for now supporting categorical and pdf, will use better interface (e.g. to Distributions.jl) later
+@enum Distribution Categorical Uniform
+
 type InfoGAN <: AbstractGAN
     generator::NeuralNetwork
     discriminator::NeuralNetwork
     posterior::NeuralNetwork
+    distributions::Dict{Int,Tuple{Distribution,Vector{Real}}}
     # TODO stuff to determin the 'c' stuff
-    input_dims::Int # just random noise
+    input_dims::Int # nb random noise dimensions ("incompressible noise")
     num_epoch::Int
 end
+
+pdf(dist::Categorical, th::Vector{Real}, cat::Int) = th[cat]
+pdf(dist::Uniform, th::Vector{Real}, ::Real) = 1. /(th[2] - th[1])
+
+function sample!(dist::Categorical, th::Vector{Real}, rng::AbstractRNG)
+    r = rand(rng)
+    for (idx, cdf) in enumerate(th) # assume th is the cdf of the categoricla distirbution
+        if r < cdf
+            return idx
+        end
+    end
+    return length(th)
+end
+
+function sample!(dist::Uniform, th::Vector{Real}, rng::AbstractRNG)
+    return (th[2]-th[1])*rand(rng) + th[1]
+end
+
+
 
 # NOTE lazy implementation with three networks rather than 2+1 networks (+1 has shared deep layerS)
 function fit!(g::InfoGAN, data::mx.AbstractDataProvider, rng::AbstractRNG=RandomDevice())
