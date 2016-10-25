@@ -19,6 +19,8 @@ type FisherInformation <: FactoredMatrix
     result::Union{mx.NDArray,Vector{Real},Matrix{Real},Void}
 end
 
+# TODO implement GGN by creating a clone network with appropriate inputs; run forward pass and backward pass (with special hessian based on loss)
+
 function mult!(fim::FisherInformation, x::Union{Vector{Real},mx.NDArray,Matrix{Real}})
     if fim.result == nothing
         fim.result = mx.zeros(size(x))
@@ -28,6 +30,8 @@ function mult!(fim::FisherInformation, x::Union{Vector{Real},mx.NDArray,Matrix{R
 
     N = size(fim.jacobian)[end]
     n = convert(Int, round(fim.sample * N))
+    # TODO this should be fixed for each call of the conjugate gradient algorithm!!! 
+    #   move this code to the top of the conjugate_gradient() function block
     iter = fim.subsample < 1.0 ? randperm(fim.rng)[1:n] : 1:N
 
     for i in iter
